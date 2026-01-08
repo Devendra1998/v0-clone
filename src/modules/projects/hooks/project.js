@@ -4,6 +4,7 @@ import {createProject , getProjectById, getProjects} from "../actions"
 
 
 export const useGetProjects = ()=>{
+    return {}
     return useQuery({
         queryKey:["projects"],
         queryFn:()=>getProjects()
@@ -12,6 +13,7 @@ export const useGetProjects = ()=>{
 
 
 export const useCreateProject = ()=>{
+    return {}
     const queryClient = useQueryClient()
     return useMutation({
         mutationFn:(value)=>createProject(value),
