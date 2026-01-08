@@ -1,39 +1,182 @@
 import { inngest } from "./client";
-import { gemini, createAgent } from "@inngest/agent-kit";
+import { gemini, createAgent, createTool, createNetwork, createState } from "@inngest/agent-kit";
 import Sandbox from "@e2b/code-interpreter";
+import { PROMPT, RESPONSE_PROMPT, FRAGMENT_TITLE_PROMPT } from "../prompt";
+import { z } from "zod";
+import { lastAssistantTextMessageContent } from "./utils";
+import db from "../lib/db";
+import { MessageRole, MessageType } from "@prisma/client";
 
 
 
-export const helloWorld = inngest.createFunction(
-  { id: "hello-world" },
-  { event: "agent/hello" },
+export const codeAgentFunction = inngest.createFunction(
+  { id: "code-agent" },
+  { event: "code-agent/run" },
 
   async ({ event, step }) => {
 
     const sandBoxId = await step.run("get-sandbox-id", async () => {
-        const sandbox = await Sandbox.create("v0-clone-nextjs-app");
-        return sandbox.sandboxId;
+      const sandbox = await Sandbox.create("v0-clone-nextjs-app");
+      return sandbox.sandboxId;
     })
 
-    const helloAgent = createAgent({
-      name: "hello-agent",
-      description: "A simple agent that says hello",
-      system: "You are a helpful assistant.",
-      model: gemini({
-        model: "gemini-2.5-flash",
-      }),
+    const state = createState(
+      {
+        summary: "",
+        files: {},
+      },
+      {
+        messages:null,
+      }
+    );
+
+    const codeAgent = createAgent({
+      name: "code-agent",
+      description: "An expert coding agent",
+      system: PROMPT,
+      model: gemini({ model: "gemini-2.5-flash" }),
+      tools: [
+        createTool({
+          name: "terminal",
+          description: "Use the terminal to run commands",
+          parameters: z.object({
+            command: z.string(),
+          }),
+          handler: async ({ command }, { step }) => {
+            return await step?.run("terminal", async () => {
+              const buffers = { stdout: "", stderr: "" };
+
+              try {
+                const sandbox = await Sandbox.connect(sandBoxId);
+                const result = await sandbox.commands.run(command, {
+                  onStdout: (data) => {
+                    buffers.stdout += data;
+                  },
+                  onStderr: (data) => {
+                    buffers.stderr += data;
+                  },
+                });
+
+                return result.stdout;
+              } catch (error) {
+                console.log(
+                  `Command failed: ${error} \n stdout: ${buffers.stdout}\n stderr: ${buffers.stderr}`
+                );
+
+                return `Command failed: ${error} \n stdout: ${buffers.stdout}\n stderr: ${buffers.stderr}`;
+              }
+            });
+          },
+        }),
+
+        createTool({
+          name: "createOrUpdateFiles",
+          description: "Create or update files in the sandbox",
+          parameters: z.object({
+            files: z.array(
+              z.object({
+                path: z.string(),
+                content: z.string(),
+              })
+            ),
+          }),
+          handler: async ({ files }, { step, network }) => {
+            const newFiles = await step?.run(
+              "createOrUpdateFiles",
+              async () => {
+                try {
+                  const updatedFiles = network?.state?.data.files || {};
+                  const sandbox = await Sandbox.connect(sandBoxId);
+                  for (const file of files) {
+                    await sandbox.files.write(file.path, file.content);
+                    updatedFiles[file.path] = file.content;
+                  }
+                  return updatedFiles;
+                } catch (error) {
+                  return "Error" + error;
+                }
+              }
+            );
+
+            if (typeof newFiles === "object") {
+              network.state.data.files = newFiles;
+            }
+          },
+        }),
+
+        createTool({
+          name: "readFiles",
+          description: "Read files in the sandbox",
+          parameters: z.object({
+            files: z.array(z.string()),
+          }),
+          handler: async ({ files }, { step }) => {
+            return await step?.run("readFiles", async () => {
+              try {
+                const sandbox = await Sandbox.connect(sandBoxId);
+                const contents = [];
+
+                for (const file of files) {
+                  const content = await sandbox.files.read(file);
+                  contents.push({ path: file, content });
+                }
+
+                return JSON.stringify(contents);
+              } catch (error) {
+                return "Error" + error;
+              }
+            });
+          },
+        }),
+      ],
+
+      lifecycle: {
+        onResponse: async ({ result, network }) => {
+          const lastAssistantMessageText =
+            lastAssistantTextMessageContent(result);
+
+          if (lastAssistantMessageText && network) {
+            if (lastAssistantMessageText.includes("<task_summary>")) {
+              network.state.data.summary = lastAssistantMessageText;
+            }
+          }
+          return result;
+        },
+      },
     });
 
-    const {output} = await helloAgent.run("Say hello to the user");
+    const network = createNetwork({
+      name: "coding-agent-network",
+      agents: [codeAgent],
+      maxIter: 10,
+      defaultState: state,
+      router: async ({ network }) => {
+        const summary = network.state.data.summary;
+
+        if (summary) {
+          return;
+        }
+        return codeAgent;
+      },
+    });
+
+    const result = await network.run(event.data.value);
+
+    const isError =
+      !result.state.data.summary ||
+      Object.keys(result.state.data.files || {}).length === 0;
 
     const sandBoxUrl = await step.run("get-sandbox-url", async () => {
-        const sandbox = await Sandbox.connect(sandBoxId);
-        const host = sandbox.getHost(3000);
-        return `http://${host}`;
+      const sandbox = await Sandbox.connect(sandBoxId);
+      const host = sandbox.getHost(3000);
+      return `http://${host}`;
     })
 
     return {
-        message: output[0].content
+      url: sandBoxUrl,
+      title:"untitled",
+      files: result.state.data.files,
+      summary: result.state.data.summary,
     }
 
   },
