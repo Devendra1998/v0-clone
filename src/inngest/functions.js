@@ -26,7 +26,7 @@ export const codeAgentFunction = inngest.createFunction(
         files: {},
       },
       {
-        messages:null,
+        messages: null,
       }
     );
 
@@ -34,7 +34,7 @@ export const codeAgentFunction = inngest.createFunction(
       name: "code-agent",
       description: "An expert coding agent",
       system: PROMPT,
-      model: gemini({ model: "gemini-2.5-flash" }),
+      model: gemini({ model: "gemini-2.5-flash-lite" }),
       tools: [
         createTool({
           name: "terminal",
@@ -172,9 +172,38 @@ export const codeAgentFunction = inngest.createFunction(
       return `http://${host}`;
     })
 
+    await step.run("save-result", async () => {
+      if (isError) {
+        return await db.message.create({
+          data: {
+            projectId: event.data.projectId,
+            content: "Something went wrong. Please try again.",
+            role: MessageRole.ASSISTANT,
+            type: MessageType.ERROR,
+          },
+        });
+      }
+
+      return await db.message.create({
+        data: {
+          projectId: event.data.projectId,
+          content: result.state.data.summary,
+          role: MessageRole.ASSISTANT,
+          type: MessageType.RESULT,
+          fragments: {
+            create: {
+              sandboxUrl: sandBoxUrl,
+              title: "Untitled",
+              files: result.state.data.files,
+            },
+          },
+        },
+      });
+    });
+
     return {
       url: sandBoxUrl,
-      title:"untitled",
+      title: "Untitled",
       files: result.state.data.files,
       summary: result.state.data.summary,
     }
