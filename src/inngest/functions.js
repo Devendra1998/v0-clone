@@ -162,6 +162,51 @@ export const codeAgentFunction = inngest.createFunction(
 
     const result = await network.run(event.data.value);
 
+    const fragmentTitleGenerator = createAgent({
+      name: "fragment-title-generator",
+      description: "Generate a title for the fragment",
+      system: FRAGMENT_TITLE_PROMPT,
+      model: gemini({ model: "gemini-2.5-flash-lite" }),
+    });
+
+    const responseGenerator = createAgent({
+      name: "response-generator",
+      description: "Generate a response for the fragment",
+      system: RESPONSE_PROMPT,
+      model: gemini({ model: "gemini-2.5-flash-lite" }),
+    });
+
+    const { output: fragmentTitleOutput } = await fragmentTitleGenerator.run(
+      result.state.data.summary
+    );
+    const { output: responseOutput } = await responseGenerator.run(
+      result.state.data.summary
+    );
+
+    const generateFragmentTitle = () => {
+      if (fragmentTitleOutput[0].type !== "text") {
+        return "Fragment";
+      }
+
+      if (Array.isArray(fragmentTitleOutput[0].content)) {
+        return fragmentTitleOutput[0].content.map((c) => c).join("");
+      } else {
+        return fragmentTitleOutput[0].content;
+      }
+    };
+
+    const generateResponse = () => {
+      if (responseOutput[0].type !== "text") {
+        return "Here you go";
+      }
+
+      if (Array.isArray(responseOutput[0].content)) {
+        return responseOutput[0].content.map((c) => c).join("");
+      } else {
+        return responseOutput[0].content;
+      }
+    };
+
     const isError =
       !result.state.data.summary ||
       Object.keys(result.state.data.files || {}).length === 0;
@@ -187,13 +232,13 @@ export const codeAgentFunction = inngest.createFunction(
       return await db.message.create({
         data: {
           projectId: event.data.projectId,
-          content: result.state.data.summary,
+          content: generateResponse(),
           role: MessageRole.ASSISTANT,
           type: MessageType.RESULT,
           fragments: {
             create: {
               sandboxUrl: sandBoxUrl,
-              title: "Untitled",
+              title: generateFragmentTitle(),
               files: result.state.data.files,
             },
           },
@@ -203,7 +248,7 @@ export const codeAgentFunction = inngest.createFunction(
 
     return {
       url: sandBoxUrl,
-      title: "Untitled",
+      title: generateFragmentTitle(),
       files: result.state.data.files,
       summary: result.state.data.summary,
     }
