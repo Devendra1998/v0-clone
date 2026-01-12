@@ -32,7 +32,7 @@ export async function consumeCredits() {
 
   const usageTracker = await getUsageTracker();
   const result = await usageTracker.consume(userId, GENERATION_COST);
-  
+
   return result; // Make sure to return the result
 }
 
@@ -44,10 +44,10 @@ export async function getUsageStatus() {
   }
 
   const usageTracker = await getUsageTracker();
-  
+
   try {
     const result = await usageTracker.get(userId);
-    
+
     // If no usage record exists yet, return null
     if (!result) {
       return null;
